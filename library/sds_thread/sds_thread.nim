@@ -4,10 +4,7 @@
 
 import std/[options, atomics, os, net, locks]
 import chronicles, chronos, chronos/threadsync, taskpools/channels_spsc_single, results
-import
-  ../ffi_types,
-  ./inter_thread_communication/sds_thread_request,
-  sds/sds_utils
+import ../ffi_types, ./inter_thread_communication/sds_thread_request, sds/sds_utils
 
 type SdsContext* = object
   thread: Thread[(ptr SdsContext)]
@@ -43,12 +40,17 @@ proc runSds(ctx: ptr SdsContext) {.async.} =
       error "sds thread could not receive a request"
       continue
 
-    ## Handle the request
-    asyncSpawn SdsThreadRequest.process(request, addr rm)
-
+    ## Ack receipt to the requester thread BEFORE processing — it only
+    ## waits for "received", not "processed", so the caller's throughput
+    ## doesn't change. Processing is then awaited (was: asyncSpawn'd),
+    ## which serializes requests on this worker. The SP channel + lock
+    ## above already assume no concurrent requests, so awaiting here
+    ## aligns the processing side with that assumption.
     let fireRes = ctx.reqReceivedSignal.fireSync()
     if fireRes.isErr():
       error "could not fireSync back to requester thread", error = fireRes.error
+
+    await SdsThreadRequest.process(request, addr rm)
 
 proc run(ctx: ptr SdsContext) {.thread.} =
   ## Launch sds worker

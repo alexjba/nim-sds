@@ -1,4 +1,5 @@
 import std/tables
+import chronos
 import sds
 
 ## Test-only Persistence backend backed by Nim tables. Lets tests verify the
@@ -23,76 +24,86 @@ proc newInMemoryStore*(): InMemoryStore =
 
 proc newInMemoryPersistence*(store: InMemoryStore): Persistence =
   Persistence(
-    saveLamport: proc(channelId: SdsChannelID, lamport: int64) {.gcsafe, raises: [].} =
+    saveLamport: proc(channelId: SdsChannelID, lamport: int64) {.async: (raises: []).} =
       store.lamports[channelId] = lamport,
-
-    appendLogEntry: proc(channelId: SdsChannelID, msg: SdsMessage) {.gcsafe, raises: [].} =
+    appendLogEntry: proc(
+        channelId: SdsChannelID, msg: SdsMessage
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId notin store.log:
           store.log[channelId] = initOrderedTable[SdsMessageID, SdsMessage]()
         store.log[channelId][msg.messageId] = msg,
-
-    removeLogEntry: proc(channelId: SdsChannelID, msgId: SdsMessageID) {.gcsafe, raises: [].} =
+    removeLogEntry: proc(
+        channelId: SdsChannelID, msgId: SdsMessageID
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId in store.log:
-          store.log[channelId].del(msgId),
-
-    setRetrievalHint: proc(msgId: SdsMessageID, hint: seq[byte]) {.gcsafe, raises: [].} =
+          store.log[channelId].del(msgId)
+    ,
+    setRetrievalHint: proc(
+        msgId: SdsMessageID, hint: seq[byte]
+    ) {.async: (raises: []).} =
       store.hints[msgId] = hint,
-
-    saveOutgoing: proc(channelId: SdsChannelID, msg: UnacknowledgedMessage) {.gcsafe, raises: [].} =
+    saveOutgoing: proc(
+        channelId: SdsChannelID, msg: UnacknowledgedMessage
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId notin store.outgoing:
           store.outgoing[channelId] =
             initOrderedTable[SdsMessageID, UnacknowledgedMessage]()
         store.outgoing[channelId][msg.message.messageId] = msg,
-
-    removeOutgoing: proc(channelId: SdsChannelID, msgId: SdsMessageID) {.gcsafe, raises: [].} =
+    removeOutgoing: proc(
+        channelId: SdsChannelID, msgId: SdsMessageID
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId in store.outgoing:
-          store.outgoing[channelId].del(msgId),
-
-    saveIncoming: proc(channelId: SdsChannelID, msg: IncomingMessage) {.gcsafe, raises: [].} =
+          store.outgoing[channelId].del(msgId)
+    ,
+    saveIncoming: proc(
+        channelId: SdsChannelID, msg: IncomingMessage
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId notin store.incoming:
-          store.incoming[channelId] =
-            initOrderedTable[SdsMessageID, IncomingMessage]()
+          store.incoming[channelId] = initOrderedTable[SdsMessageID, IncomingMessage]()
         store.incoming[channelId][msg.message.messageId] = msg,
-
-    removeIncoming: proc(channelId: SdsChannelID, msgId: SdsMessageID) {.gcsafe, raises: [].} =
+    removeIncoming: proc(
+        channelId: SdsChannelID, msgId: SdsMessageID
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId in store.incoming:
-          store.incoming[channelId].del(msgId),
-
+          store.incoming[channelId].del(msgId)
+    ,
     saveOutgoingRepair: proc(
         channelId: SdsChannelID, msgId: SdsMessageID, entry: OutgoingRepairEntry
-    ) {.gcsafe, raises: [].} =
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId notin store.outgoingRepair:
           store.outgoingRepair[channelId] =
             initOrderedTable[SdsMessageID, OutgoingRepairEntry]()
         store.outgoingRepair[channelId][msgId] = entry,
-
-    removeOutgoingRepair: proc(channelId: SdsChannelID, msgId: SdsMessageID) {.gcsafe, raises: [].} =
+    removeOutgoingRepair: proc(
+        channelId: SdsChannelID, msgId: SdsMessageID
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId in store.outgoingRepair:
-          store.outgoingRepair[channelId].del(msgId),
-
+          store.outgoingRepair[channelId].del(msgId)
+    ,
     saveIncomingRepair: proc(
         channelId: SdsChannelID, msgId: SdsMessageID, entry: IncomingRepairEntry
-    ) {.gcsafe, raises: [].} =
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId notin store.incomingRepair:
           store.incomingRepair[channelId] =
             initOrderedTable[SdsMessageID, IncomingRepairEntry]()
         store.incomingRepair[channelId][msgId] = entry,
-
-    removeIncomingRepair: proc(channelId: SdsChannelID, msgId: SdsMessageID) {.gcsafe, raises: [].} =
+    removeIncomingRepair: proc(
+        channelId: SdsChannelID, msgId: SdsMessageID
+    ) {.async: (raises: []).} =
       {.cast(raises: []).}:
         if channelId in store.incomingRepair:
-          store.incomingRepair[channelId].del(msgId),
-
-    dropChannel: proc(channelId: SdsChannelID) {.gcsafe, raises: [].} =
+          store.incomingRepair[channelId].del(msgId)
+    ,
+    dropChannel: proc(channelId: SdsChannelID) {.async: (raises: []).} =
       {.cast(raises: []).}:
         store.lamports.del(channelId)
         store.log.del(channelId)
@@ -102,8 +113,9 @@ proc newInMemoryPersistence*(store: InMemoryStore): Persistence =
         store.incomingRepair.del(channelId)
         store.dropChannelCalls[channelId] =
           store.dropChannelCalls.getOrDefault(channelId) + 1,
-
-    loadAllForChannel: proc(channelId: SdsChannelID): ChannelSnapshot {.gcsafe, raises: [].} =
+    loadAllForChannel: proc(
+        channelId: SdsChannelID
+    ): Future[ChannelSnapshot] {.async: (raises: []).} =
       {.cast(raises: []).}:
         var snap = ChannelSnapshot()
         if channelId in store.lamports:
@@ -123,5 +135,5 @@ proc newInMemoryPersistence*(store: InMemoryStore): Persistence =
         if channelId in store.incomingRepair:
           for msgId, entry in store.incomingRepair[channelId]:
             snap.incomingRepairBuffer.add((msgId, entry))
-        snap,
+        return snap,
   )
