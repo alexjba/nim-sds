@@ -21,7 +21,9 @@ in pkgs.mkShell {
   ];
 
   # Avoid compiling Nim itself.
+  # Setting nim cache to proper tmp location avoids cache collision in CI
   shellHook = ''
     export USE_SYSTEM_NIM=1
+    export XDG_CACHE_HOME="$TMPDIR"
   '';
 }
