@@ -163,17 +163,56 @@ proc nimLibDir(): string =
     quit "Error: nimbase.h not found in " & result
 
 task libsdsStaticMac, "Generate bindings":
-  let outLibNameAndExt = "libsds.a"
-  let name = "libsds"
+  # The archive exports the _Sds* API and nothing else: the Nim runtime inside
+  # it must not clash with the runtime of the executable that links it.
+  let srcDir = libraryDir()
+  let outDir = sdsOutDir()
+  let nimcacheDir = nimcacheDirOf(outDir, "libsdsStaticMac")
+  if dirExists nimcacheDir:
+    rmDir nimcacheDir
+  mkDir outDir
 
-  let arch = getArch()
+  let aFile = outDir / "libsds.a"
+  let cpu = if getArch() == "arm64": "arm64" else: "amd64"
+  let clangArch = if cpu == "amd64": "x86_64" else: cpu
   let sdkPath = staticExec("xcrun --show-sdk-path").strip()
-  let archFlags = (if arch == "arm64": "--cpu:arm64 --passC:\"-arch arm64\" --passL:\"-arch arm64\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " & sdkPath & "\""
-                   else: "--cpu:amd64 --passC:\"-arch x86_64\" --passL:\"-arch x86_64\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " & sdkPath & "\"")
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    archFlags & " -d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE",
-    "static"
+
+  # 1) Generate C sources from Nim (no linking)
+  exec "nim c" & " --nimcache:" & quoteShell(nimcacheDir) & " --cpu:" & cpu &
+    " --compileOnly:on" & " --noMain --mm:refc" & " --threads:on --opt:size --header" &
+    " --nimMainPrefix:libsds --skipParentCfg:on" & " --cc:clang" & " -d:useMalloc" &
+    " -d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on" &
+    " -d:chronicles_log_level=TRACE" & envNimFlags() &
+    " " & quoteShell(srcDir / "libsds.nim")
+
+  # 2) Compile the generated C files with hidden visibility. -fno-common turns
+  # tentative definitions into regular data symbols; as common symbols the
+  # `ld -r -exported_symbol` pass below cannot localize them, and a few hundred
+  # Nim runtime globals escape the export surface.
+  let clangFlags =
+    "-arch " & clangArch & " -isysroot " & quoteShell(sdkPath) &
+    " -I" & quoteShell(nimLibDir()) & " -O2 -fvisibility=hidden -fno-common"
+
+  var objectFiles: seq[string] = @[]
+  for cFile in listFiles(nimcacheDir):
+    if cFile.endsWith(".c"):
+      let oFile = cFile.changeFileExt("o")
+      exec "clang " & clangFlags & " -c " & quoteShell(cFile) &
+        " -o " & quoteShell(oFile)
+      objectFiles.add(oFile)
+
+  # 3) Merge into one object exporting only the _Sds* API
+  let objListFile = outDir / "objects.txt"
+  writeFile(objListFile, objectFiles.join("\n"))
+  let mergedObj = outDir / "libsds_merged.o"
+  exec "xcrun ld -r -arch " & clangArch & " -exported_symbol '_Sds*' -o " &
+    quoteShell(mergedObj) & " -filelist " & quoteShell(objListFile)
+  # ZERO_AR_DATE zeroes the ar header mtimes, so an unchanged rebuild produces a
+  # byte-identical archive for embedders that compare content before relinking.
+  exec "ZERO_AR_DATE=1 ar rcs " & quoteShell(aFile) & " " & quoteShell(mergedObj)
+  exec "rm -f " & quoteShell(mergedObj) & " " & quoteShell(objListFile)
+
+  echo "✔ macOS static library created: " & aFile
 
 proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
   echo "Building iOS libsds library"
@@ -203,11 +242,11 @@ proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
       " " & quoteShell(srcDir / "libsds.nim")
 
   # 2) Compile to objects with hidden visibility, so the Nim runtime symbols
-  # stay private to this archive.
+  # stay private to this archive. -fno-common: see libsdsStaticMac.
   let clangFlags = "-arch " & arch & " -isysroot " & quoteShell(sdkPath) &
       " -I" & quoteShell(nimLibDir()) &
       " -fembed-bitcode -miphoneos-version-min=16.0 -O2" &
-      " -fvisibility=hidden"
+      " -fvisibility=hidden -fno-common"
 
   var objectFiles: seq[string] = @[]
   for cFile in listFiles(nimcacheDir):
@@ -217,8 +256,10 @@ proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
         " -o " & quoteShell(oFile)
       objectFiles.add(oFile)
 
-  # 3) Create the static library from all object files
-  exec "ar rcs " & quoteShell(aFileTmp) & " " & quoteShellCommand(objectFiles)
+  # 3) ZERO_AR_DATE zeroes the ar header mtimes, so an unchanged rebuild
+  # produces a byte-identical archive for embedders that compare content.
+  exec "ZERO_AR_DATE=1 ar rcs " & quoteShell(aFileTmp) & " " &
+    quoteShellCommand(objectFiles)
 
   # 4) Localize every symbol outside the public API; the listed ones stay
   # global, so the embedded Nim runtime stays private to this archive.
