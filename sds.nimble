@@ -107,50 +107,36 @@ task test, "Run the test suite":
       " --out:" & quoteShell(outDir / t) & envNimFlags() &
       " " & quoteShell(sdsRootDir() / "tests" / (t & ".nim"))
 
+const desktopParams =
+  "-d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE"
+
+proc macArchFlags(): string =
+  ## The Nim and clang flags that pin a build to the host Mac's CPU and SDK.
+  let cpu = if getArch() == "arm64": "arm64" else: "amd64"
+  let clangArch = if cpu == "amd64": "x86_64" else: cpu
+  let sdkPath = staticExec("xcrun --show-sdk-path").strip()
+  "--cpu:" & cpu & " --passC:\"-arch " & clangArch & "\" --passL:\"-arch " &
+    clangArch & "\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " &
+    sdkPath & "\""
+
+proc buildDesktopLib(outLibNameAndExt, `type`: string, archFlags = "") =
+  buildLibrary outLibNameAndExt, "libsds", libraryDir(),
+    archFlags & " " & desktopParams, `type`
+
 task libsdsDynamicWindows, "Generate bindings":
-  let outLibNameAndExt = "libsds.dll"
-  let name = "libsds"
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    """-d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE """,
-    "dynamic"
+  buildDesktopLib "libsds.dll", "dynamic"
 
 task libsdsDynamicLinux, "Generate bindings":
-  let outLibNameAndExt = "libsds.so"
-  let name = "libsds"
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    """-d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE """,
-    "dynamic"
+  buildDesktopLib "libsds.so", "dynamic"
 
 task libsdsDynamicMac, "Generate bindings":
-  let outLibNameAndExt = "libsds.dylib"
-  let name = "libsds"
-
-  let arch = getArch()
-  let sdkPath = staticExec("xcrun --show-sdk-path").strip()
-  let archFlags = (if arch == "arm64": "--cpu:arm64 --passC:\"-arch arm64\" --passL:\"-arch arm64\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " & sdkPath & "\""
-                   else: "--cpu:amd64 --passC:\"-arch x86_64\" --passL:\"-arch x86_64\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " & sdkPath & "\"")
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    archFlags & " -d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE",
-    "dynamic"
+  buildDesktopLib "libsds.dylib", "dynamic", macArchFlags()
 
 task libsdsStaticWindows, "Generate bindings":
-  let outLibNameAndExt = "libsds.lib"
-  let name = "libsds"
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    """-d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE """,
-    "static"
+  buildDesktopLib "libsds.lib", "static"
 
 task libsdsStaticLinux, "Generate bindings":
-  let outLibNameAndExt = "libsds.a"
-  let name = "libsds"
-  buildLibrary outLibNameAndExt,
-    name, libraryDir(),
-    """-d:chronicles_line_numbers --warning:Deprecated:off --warning:UnusedImport:on -d:chronicles_log_level=TRACE """,
-    "static"
+  buildDesktopLib "libsds.a", "static"
 
 proc nimLibDir(): string =
   ## lib/ of the nim on PATH, where nimbase.h lives. The macOS and iOS tasks
