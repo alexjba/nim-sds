@@ -56,6 +56,10 @@ place:
 SDS_OUT_DIR=/path/to/out nim libsdsDynamicLinux /path/to/nim-sds/sds.nims
 ```
 
+From a copy installed by nimble, use `library/sds_tasks.nims` instead of
+`sds.nims`: nimble 0.22.3 strips root files that `installDirs` does not cover,
+so that is the entry point that survives installation. It is the same include.
+
 `NIMFLAGS` is appended to every compile, which is how such a consumer passes its
 own dependency resolution (`--path:` entries) in. The header contract stays
 `library/libsds.h` in the source tree.

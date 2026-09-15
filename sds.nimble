@@ -11,11 +11,14 @@ srcDir = "src"
 # Keep the repo layout in installed copies: a nimble store copy installs srcDir
 # only, which would drop library/ (the FFI wrapper the libsds tasks compile).
 installDirs = @["library", "src"]
-# sds.nims is the committed entry point for `nim <task> sds.nims`: a consumer
-# building a READ-ONLY copy of this package (a nimble store copy) cannot create
-# the symlink the Makefile used to make. installDirs is a whitelist — anything
-# not listed is stripped from the installed copy — so the file must be declared.
-installFiles = @["sds.nims"]
+# WALL (nimble 0.22.3): installDirs is a whitelist — anything not listed is
+# stripped from the installed copy — and `installFiles` does NOT rescue a root
+# file: nimble resolves both lists relative to srcDir, and even spelled
+# `../sds.nims` (which it then finds, no "Missing file" warning) the file is
+# not installed. That is why the task entry point a CONSUMER uses lives at
+# library/sds_tasks.nims, inside an installed directory. sds.nims at the root
+# is the same thing for checkouts (it is what `make libsds` runs); both just
+# include this manifest, and sdsRootDir() below normalizes for the difference.
 
 # Dependencies. (This branch — nimble-v0.3.3 — is v0.3.3 made consumable as a
 # nimble dependency: one manifest at the root (reliability.nimble removed),
@@ -60,17 +63,27 @@ proc nimcacheDirOf(outDir: string): string =
   ## task, keeps that listing correct AND the source tree untouched.
   outDir / "nimcache"
 
+proc sdsRootDir(): string =
+  ## This package's root directory. `thisDir()` follows the ENTRY script, not
+  ## this manifest (nimscript's currentSourcePath resolves to the main script,
+  ## verified), and the entry script is sds.nims at the root in a checkout but
+  ## library/sds_tasks.nims in an installed copy — see the installDirs note
+  ## above. Normalize instead of assuming: whichever directory holds
+  ## sds.nimble is the root.
+  if fileExists(thisDir() / "sds.nimble"): thisDir()
+  else: parentDir(thisDir())
+
 proc libraryDir(): string =
   ## The FFI wrapper's sources (library/libsds.nim + library/libsds.h, the
-  ## header contract embedders compile against). Located from THIS script, not
+  ## header contract embedders compile against). Located from THIS package, not
   ## from the working directory: a consumer runs `nim <task> <store
-  ## copy>/sds.nims` from its own build directory, never from here.
-  thisDir() / "library"
+  ## copy>/library/sds_tasks.nims` from its own build directory, never from here.
+  sdsRootDir() / "library"
 
 proc buildLibrary(
     outLibNameAndExt: string,
     name: string,
-    srcDir = thisDir(),
+    srcDir = sdsRootDir(),
     params = "",
     `type` = "static",
 ) =
@@ -112,7 +125,7 @@ task test, "Run the test suite":
   for t in ["test_bloom", "test_reliability", "test_wire_compat"]:
     exec "nim c -r --nimcache:" & quoteShell(nimcacheDirOf(outDir)) &
       " --out:" & quoteShell(outDir / t) & envNimFlags() &
-      " " & quoteShell(thisDir() / "tests" / (t & ".nim"))
+      " " & quoteShell(sdsRootDir() / "tests" / (t & ".nim"))
 
 task libsdsDynamicWindows, "Generate bindings":
   let outLibNameAndExt = "libsds.dll"
