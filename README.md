@@ -44,6 +44,30 @@ Then, use one of the following commands, according to the current architecture:
 
 At the end of the process, the library will be created in build/libsds.so
 
+### Build outputs, and building from a read-only copy
+
+Every build task writes exclusively under one directory, `build` by default.
+Set `SDS_OUT_DIR` (absolute path) to put the nimcache, the object files and the
+library somewhere else — nothing is written into the source tree, so a consumer
+that resolves this package through nimble can build the read-only store copy in
+place:
+
+```code
+SDS_OUT_DIR=/path/to/out nim libsdsDynamicLinux /path/to/nim-sds/sds.nims
+```
+
+From a copy installed by nimble, use `library/sds_tasks.nims` instead of
+`sds.nims`: nimble 0.22.3 strips root files that `installDirs` does not cover,
+so that is the entry point that survives installation; it is the same include.
+
+`NIMFLAGS` is appended to every compile, which is how such a consumer passes its
+own dependency resolution (`--path:` entries) in. The header contract is
+`library/libsds.h` in the source tree.
+
+Install this package with `nimble install -y`: nimble 0.22.3 validates the
+`installDirs` entries against `srcDir`, so it prompts about two directories it
+cannot find there before installing them correctly anyway.
+
 
 
 

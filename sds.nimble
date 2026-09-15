@@ -34,6 +34,22 @@ proc envNimFlags(): string =
   let flags = getEnv("NIMFLAGS")
   if flags.len > 0: " " & flags else: ""
 
+proc sdsOutDir(): string =
+  ## Every artifact of a build task goes here: nimcache, objects, archives, the
+  ## library. A package resolved through nimble is built from a read-only store
+  ## copy, so no task may write under the source tree; such a consumer passes an
+  ## absolute path in SDS_OUT_DIR. Unset, it is `build` under the working
+  ## directory, which is what the Makefile flow uses.
+  result = getEnv("SDS_OUT_DIR")
+  if result.len == 0:
+    result = "build"
+
+proc nimcacheDirOf(outDir, target: string): string =
+  ## One nimcache per build target, under the out dir. The macOS and mobile
+  ## tasks compile every .c file they find there, so the location must be
+  ## pinned and must hold that target's generated sources only.
+  outDir / "nimcache" / target
+
 proc sdsRootDir(): string =
   ## This package's root. `currentSourcePath()` is this manifest whichever
   ## entry script included it, while `thisDir()` is the entry script's own
@@ -53,13 +69,14 @@ proc buildLibrary(
     params = "",
     `type` = "static",
 ) =
-  if not dirExists "build":
-    mkDir "build"
+  let outDir = sdsOutDir()
+  mkDir outDir
   # forward any extra flags given on the nim command line after the task name
   var extra_params = params
   for i in 2 ..< paramCount():
     extra_params &= " " & paramStr(i)
-  let outFlags = " --out:build/" & outLibNameAndExt
+  let outFlags = " --nimcache:" & quoteShell(nimcacheDirOf(outDir, outLibNameAndExt)) &
+    " --out:" & quoteShell(outDir / outLibNameAndExt)
   if `type` == "static":
     exec "nim c" & outFlags &
       " --threads:on --app:staticlib --opt:size --noMain --mm:refc --header --nimMainPrefix:libsds --skipParentCfg:on " &
@@ -83,8 +100,11 @@ proc getArch(): string =
 # Tasks
 task test, "Run the test suite":
   # tests/ is not in installDirs, so this task runs in a checkout only.
+  let outDir = sdsOutDir()
+  mkDir outDir
   for t in ["test_bloom", "test_reliability", "test_wire_compat"]:
-    exec "nim c -r" & envNimFlags() &
+    exec "nim c -r --nimcache:" & quoteShell(nimcacheDirOf(outDir, t)) &
+      " --out:" & quoteShell(outDir / t) & envNimFlags() &
       " " & quoteShell(sdsRootDir() / "tests" / (t & ".nim"))
 
 task libsdsDynamicWindows, "Generate bindings":
@@ -158,21 +178,22 @@ task libsdsStaticMac, "Generate bindings":
 proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
   echo "Building iOS libsds library"
 
-  let outDir = "build"
-  let nimcacheDir = outDir & "/nimcache"
-  if not dirExists outDir:
-    mkDir outDir
+  let outDir = sdsOutDir()
+  let nimcacheDir = nimcacheDirOf(outDir, "libsdsIOS")
+  if dirExists nimcacheDir:
+    rmDir nimcacheDir
+  mkDir outDir
 
   if sdkPath.len == 0:
     quit "Error: Xcode/iOS SDK not found"
 
-  let aFile = outDir & "/libsds.a"
-  let aFileTmp = outDir & "/libsds_tmp.a"
+  let aFile = outDir / "libsds.a"
+  let aFileTmp = outDir / "libsds_tmp.a"
   let arch = getArch()
 
   # 1) Generate C sources from Nim (no linking)
   exec "nim c" &
-      " --nimcache:" & nimcacheDir & " --os:ios --cpu:" & arch &
+      " --nimcache:" & quoteShell(nimcacheDir) & " --os:ios --cpu:" & arch &
       " --compileOnly:on" &
       " --noMain --mm:orc" &
       " --threads:on --opt:size --header" &
@@ -183,7 +204,7 @@ proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
 
   # 2) Compile to objects with hidden visibility, so the Nim runtime symbols
   # stay private to this archive.
-  let clangFlags = "-arch " & arch & " -isysroot " & sdkPath &
+  let clangFlags = "-arch " & arch & " -isysroot " & quoteShell(sdkPath) &
       " -I" & quoteShell(nimLibDir()) &
       " -fembed-bitcode -miphoneos-version-min=16.0 -O2" &
       " -fvisibility=hidden"
@@ -192,18 +213,19 @@ proc buildMobileIOS(srcDir = libraryDir(), sdkPath = "") =
   for cFile in listFiles(nimcacheDir):
     if cFile.endsWith(".c"):
       let oFile = cFile.changeFileExt("o")
-      exec "clang " & clangFlags & " -c " & cFile & " -o " & oFile
+      exec "clang " & clangFlags & " -c " & quoteShell(cFile) &
+        " -o " & quoteShell(oFile)
       objectFiles.add(oFile)
 
   # 3) Create the static library from all object files
-  exec "ar rcs " & aFileTmp & " " & objectFiles.join(" ")
+  exec "ar rcs " & quoteShell(aFileTmp) & " " & quoteShellCommand(objectFiles)
 
   # 4) Localize every symbol outside the public API; the listed ones stay
   # global, so the embedded Nim runtime stays private to this archive.
   let keepSymbols = "_Sds*:_libsdsNimMain:_libsdsDatInit*:_libsdsInit*:_NimMainModule__libsds*"
-  exec "xcrun libtool -static -o " & aFile & " " & aFileTmp &
+  exec "xcrun libtool -static -o " & quoteShell(aFile) & " " & quoteShell(aFileTmp) &
        " -exported_symbols_list /dev/stdin <<< '" & keepSymbols &
-       "' 2>/dev/null || cp " & aFileTmp & " " & aFile
+       "' 2>/dev/null || cp " & quoteShell(aFileTmp) & " " & quoteShell(aFile)
 
   echo "✔ iOS library created: " & aFile
 
@@ -215,17 +237,17 @@ task libsdsIOS, "Build the mobile bindings for iOS":
 proc buildMobileAndroid(srcDir = libraryDir(), params = "") =
   let cpu = getArch()
 
-  let outDir = "build/"
-  if not dirExists outDir:
-    mkDir outDir
+  let outDir = sdsOutDir()
+  mkDir outDir
 
   var extra_params = params
   for i in 2 ..< paramCount():
     extra_params &= " " & paramStr(i)
 
-  exec "nim c" & " --out:" & outDir &
-    "/libsds.so --threads:on --app:lib --opt:size --noMain --mm:refc --nimMainPrefix:libsds " &
-    "-d:chronicles_sinks=textlines[dynamic] --header --passL:-L" & outDir &
+  exec "nim c" & " --nimcache:" & quoteShell(nimcacheDirOf(outDir, "libsdsAndroid-" & cpu)) &
+    " --out:" & quoteShell(outDir / "libsds.so") &
+    " --threads:on --app:lib --opt:size --noMain --mm:refc --nimMainPrefix:libsds " &
+    "-d:chronicles_sinks=textlines[dynamic] --header --passL:-L" & quoteShell(outDir) &
     " --passL:-llog --cpu:" & cpu & " --os:android -d:androidNDK " & extra_params &
     envNimFlags() & " " & quoteShell(srcDir / "libsds.nim")
 

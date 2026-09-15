@@ -29,17 +29,12 @@ else # "variables.mk" was included. Business as usual until the end of this file
 # default target, because it's the first one that doesn't start with '.'
 all: | libsds
 
-sds.nims:
-	ln -s sds.nimble $@
-
 update: | update-common
-	rm -rf sds.nims && \
-		$(MAKE) sds.nims $(HANDLE_OUTPUT)
 
 clean:
-	rm -rf build
+	rm -rf $(SDS_OUT_DIR)
 
-deps: | deps-common sds.nims
+deps: | deps-common
 
 # must be included after the default target
 -include $(BUILD_SYSTEM_DIR)/makefiles/targets.mk
@@ -77,6 +72,10 @@ else ifeq ($(detected_OS),Darwin)
 else ifeq ($(detected_OS),Linux)
 	BUILD_COMMAND := $(BUILD_COMMAND)Linux
 endif
+
+# Exported so the sds.nims tasks write their artifacts here and nowhere else.
+SDS_OUT_DIR ?= build
+export SDS_OUT_DIR
 
 libsds: | deps
 	$(ENV_SCRIPT) nim $(BUILD_COMMAND) $(NIM_PARAMS) sds.nims

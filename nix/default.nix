@@ -64,23 +64,19 @@ in stdenv.mkDerivation rec {
     make nimbus-build-system-nimble-dir
   '';
 
-  preBuild = ''
-    ln -s sds.nimble sds.nims
-  '';
-
   installPhase = let
     androidManifest = ''
       <manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"org.waku.${pname}\" />
     '';
   in if isAndroidBuild then ''
     mkdir -p $out/jni
-    cp -r build/* $out/jni/
+    cp build/libsds.* $out/jni/
     echo '${androidManifest}' > $out/jni/AndroidManifest.xml
     cd $out
     zip -r libwaku.aar *
   '' else ''
     mkdir -p $out/lib -p $out/include
-    cp build/* $out/lib/
+    cp build/libsds.* $out/lib/
     cp library/libsds.h $out/include/
   '';
 
