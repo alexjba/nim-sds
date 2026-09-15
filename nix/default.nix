@@ -64,10 +64,6 @@ in stdenv.mkDerivation rec {
     make nimbus-build-system-nimble-dir
   '';
 
-  preBuild = ''
-    ln -s sds.nimble sds.nims
-  '';
-
   installPhase = let
     androidManifest = ''
       <manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"org.waku.${pname}\" />
