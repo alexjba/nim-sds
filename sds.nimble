@@ -147,6 +147,8 @@ proc buildMobileIOS(srcDir = ".", sdkPath = "") =
 
   # 2) Compile all generated C files to object files with hidden visibility
   # This prevents symbol conflicts with other Nim libraries (e.g., libnim_status_client)
+  # -fno-common: step 3 cannot localize common symbols, so they would stay exported.
+  # -fno-strict-aliasing: as nim itself compiles its C (config/nim.cfg).
   # nimbase.h lives in lib/, next to the resolved compiler's bin/.
   let (nimBin, _) = gorgeEx("which nim")
   let nimLibDir = parentDir(parentDir(nimBin.strip())) / "lib"
@@ -154,7 +156,8 @@ proc buildMobileIOS(srcDir = ".", sdkPath = "") =
     quit "Error: nimbase.h not found in " & nimLibDir
   let clangFlags =
     "-arch " & clangArch & " -isysroot " & sdkPath & " -I" & nimLibDir &
-    " -fembed-bitcode -miphoneos-version-min=16.2 -O2" & " -fvisibility=hidden"
+    " -fembed-bitcode -miphoneos-version-min=16.2 -O2" & " -fvisibility=hidden" &
+    " -fno-common -fno-strict-aliasing"
 
   var objectFiles: seq[string] = @[]
   for cFile in listFiles(nimcacheDir):
@@ -172,7 +175,8 @@ proc buildMobileIOS(srcDir = ".", sdkPath = "") =
   let mergedObj = outDir & "/libsds_merged.o"
   exec "xcrun ld -r -arch " & clangArch & " -exported_symbol '_sds_*' -o " & mergedObj &
     " -filelist " & objListFile
-  exec "ar rcs " & aFile & " " & mergedObj
+  # ZERO_AR_DATE: an unchanged rebuild is byte-identical.
+  exec "ZERO_AR_DATE=1 ar rcs " & aFile & " " & mergedObj
   exec "rm -f " & mergedObj & " " & objListFile
 
   echo "✔ iOS library created: " & aFile
