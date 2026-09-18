@@ -25,6 +25,11 @@ requires "results"
 requires "taskpools < 0.2.0"
 requires "https://github.com/logos-messaging/nim-ffi#v0.1.5"
 
+proc libraryDir(): string =
+  ## Located from this manifest, not the working directory, so the tasks can run
+  ## from any directory and still write to `build/` under it.
+  parentDir(currentSourcePath()) / "library"
+
 proc buildLibrary(
     outLibNameAndExt: string,
     name: string,
@@ -41,16 +46,16 @@ proc buildLibrary(
   if `type` == "static":
     exec "nim c" & " --out:build/" & outLibNameAndExt &
       " --threads:on --app:staticlib --opt:size --noMain --mm:refc --header --nimMainPrefix:libsds -d:noSignalHandler " &
-      params & " " & srcDir & name & ".nim"
+      params & " " & quoteShell(srcDir / (name & ".nim"))
   else:
     when defined(windows):
       exec "nim c" & " --out:build/" & outLibNameAndExt &
         " --threads:on --app:lib --opt:size --noMain --mm:refc --header --nimMainPrefix:libsds -d:noSignalHandler " &
-        params & " " & srcDir & name & ".nim"
+        params & " " & quoteShell(srcDir / (name & ".nim"))
     else:
       exec "nim c" & " --out:build/" & outLibNameAndExt &
         " --threads:on --app:lib --opt:size --noMain --mm:refc --header --nimMainPrefix:libsds -d:noSignalHandler " &
-        params & " " & srcDir & name & ".nim"
+        params & " " & quoteShell(srcDir / (name & ".nim"))
 
 proc getMyCpu(): string =
   ## Returns a Nim-compatible CPU name (e.g. amd64, arm64) for the host.
@@ -94,7 +99,7 @@ proc macArchFlags(): string =
     "\" --passC:\"-isysroot " & sdkPath & "\" --passL:\"-isysroot " & sdkPath & "\""
 
 proc buildDesktopLib(outLibNameAndExt, `type`: string, archFlags = "") =
-  buildLibrary outLibNameAndExt, "libsds", "library/",
+  buildLibrary outLibNameAndExt, "libsds", libraryDir(),
     archFlags & " " & desktopParams, `type`
 
 task libsdsDynamicWindows, "Generate bindings":
@@ -138,7 +143,7 @@ proc buildMobileIOS(srcDir = ".", sdkPath = "") =
   exec "nim c" & " --nimcache:" & nimcacheDir & " --os:ios --cpu:" & cpu &
     " --compileOnly:on" & " --noMain --mm:refc" & " --threads:on --opt:size --header" &
     " --nimMainPrefix:libsds" & " --cc:clang" & " -d:useMalloc" & " -d:noSignalHandler" &
-    " " & srcDir & "/libsds.nim"
+    " " & getEnv("NIM_PARAMS") & " " & quoteShell(srcDir / "libsds.nim")
 
   # 2) Compile all generated C files to object files with hidden visibility
   # This prevents symbol conflicts with other Nim libraries (e.g., libnim_status_client)
@@ -173,13 +178,12 @@ proc buildMobileIOS(srcDir = ".", sdkPath = "") =
   echo "✔ iOS library created: " & aFile
 
 task libsdsIOS, "Build the mobile bindings for iOS":
-  let srcDir = "./library"
   var sdkPath = getEnv("IOS_SDK_PATH")
   if sdkPath.len == 0:
     let (detected, exitCode) = gorgeEx("xcrun --show-sdk-path --sdk iphoneos")
     if exitCode == 0:
       sdkPath = detected.strip()
-  buildMobileIOS srcDir, sdkPath
+  buildMobileIOS libraryDir(), sdkPath
 
 ### Mobile Android
 proc checkAndroidNdk() =
@@ -249,33 +253,32 @@ proc buildMobileAndroid(srcDir = ".", extra_params = "") =
     " --passL:-llog" &
     " -d:chronicles_sinks=textlines[dynamic]" &
     " --header" &
-    " " & extra_params &
-    " " & srcDir & "/libsds.nim"
+    " " & extra_params & " " & getEnv("NIM_PARAMS") &
+    " " & quoteShell(srcDir / "libsds.nim")
 
 task libsdsAndroid, "Build the mobile bindings for Android (uses ARCH env var)":
   checkAndroidNdk()
-  let srcDir = "./library"
-  buildMobileAndroid srcDir, "-d:chronicles_log_level=ERROR"
+  buildMobileAndroid libraryDir(), "-d:chronicles_log_level=ERROR"
 
 task libsdsAndroidArm64, "Build Android arm64 bindings":
   checkAndroidNdk()
   putEnv("ARCH", "arm64")
-  buildMobileAndroid "./library", "-d:chronicles_log_level=ERROR"
+  buildMobileAndroid libraryDir(), "-d:chronicles_log_level=ERROR"
 
 task libsdsAndroidAmd64, "Build Android amd64 bindings":
   checkAndroidNdk()
   putEnv("ARCH", "amd64")
-  buildMobileAndroid "./library", "-d:chronicles_log_level=ERROR"
+  buildMobileAndroid libraryDir(), "-d:chronicles_log_level=ERROR"
 
 task libsdsAndroidX86, "Build Android x86 bindings":
   checkAndroidNdk()
   putEnv("ARCH", "i386")
-  buildMobileAndroid "./library", "-d:chronicles_log_level=ERROR"
+  buildMobileAndroid libraryDir(), "-d:chronicles_log_level=ERROR"
 
 task libsdsAndroidArm, "Build Android arm bindings":
   checkAndroidNdk()
   putEnv("ARCH", "arm")
-  buildMobileAndroid "./library", "-d:chronicles_log_level=ERROR"
+  buildMobileAndroid libraryDir(), "-d:chronicles_log_level=ERROR"
 
 task libsds, "Build the shared library for the current platform":
   when defined(macosx):
